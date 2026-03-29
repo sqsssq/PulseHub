@@ -5,10 +5,48 @@ import useSocket from "../hooks/useSocket";
 import MarkdownContent from "../components/MarkdownContent";
 import { parseServerDate } from "../utils/discussion";
 
-function sortSelectedIdeas(ideas = []) {
-  return [...ideas]
-    .filter((idea) => idea.is_selected)
-    .sort((a, b) => (a.share_order ?? Number.MAX_SAFE_INTEGER) - (b.share_order ?? Number.MAX_SAFE_INTEGER) || parseServerDate(a.submitted_at) - parseServerDate(b.submitted_at));
+function Icon({ children, className = "h-4 w-4" }) {
+  return (
+    <span className={`inline-flex items-center justify-center ${className}`} aria-hidden="true">
+      <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className="h-full w-full">
+        {children}
+      </svg>
+    </span>
+  );
+}
+
+function BackIcon() {
+  return (
+    <Icon>
+      <path d="M12.5 4.5 7 10l5.5 5.5" />
+      <path d="M7.5 10h7" />
+    </Icon>
+  );
+}
+
+function buildShareGroups(discussion) {
+  const ideas = discussion?.ideas || [];
+  const groups = discussion?.groups || [];
+
+  return groups
+    .map((groupName) => {
+      const selectedIdeas = ideas
+        .filter((idea) => idea.group_id === groupName && idea.is_selected)
+        .sort((a, b) => parseServerDate(a.submitted_at) - parseServerDate(b.submitted_at));
+
+      if (selectedIdeas.length === 0) {
+        return null;
+      }
+
+      return {
+        id: groupName,
+        groupName,
+        shareOrder: Math.min(...selectedIdeas.map((idea) => idea.share_order ?? Number.MAX_SAFE_INTEGER)),
+        ideas: selectedIdeas,
+      };
+    })
+    .filter(Boolean)
+    .sort((a, b) => a.shareOrder - b.shareOrder || a.groupName.localeCompare(b.groupName));
 }
 
 export default function DiscussionShare() {
@@ -57,14 +95,14 @@ export default function DiscussionShare() {
     timer_update: () => {},
   });
 
-  const selectedIdeas = useMemo(() => sortSelectedIdeas(discussion?.ideas || []), [discussion?.ideas]);
-  const activeIdea = selectedIdeas[activeIndex] || null;
+  const shareGroups = useMemo(() => buildShareGroups(discussion), [discussion]);
+  const activeGroup = shareGroups[activeIndex] || null;
 
   useEffect(() => {
-    if (activeIndex > Math.max(selectedIdeas.length - 1, 0)) {
-      setActiveIndex(Math.max(selectedIdeas.length - 1, 0));
+    if (activeIndex > Math.max(shareGroups.length - 1, 0)) {
+      setActiveIndex(Math.max(shareGroups.length - 1, 0));
     }
-  }, [activeIndex, selectedIdeas.length]);
+  }, [activeIndex, shareGroups.length]);
 
   if (user === undefined || (!discussion && !loadError)) {
     return <main className="page-loading">Loading share view...</main>;
@@ -82,24 +120,26 @@ export default function DiscussionShare() {
     <main className="min-h-screen bg-slate-50">
       <div className="mx-auto max-w-7xl px-6 py-6">
         <div className="mb-6 flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-[color:var(--color-line)] bg-white p-5">
-          <div>
-            <p className="eyebrow">Sharing View</p>
-            <h1 className="text-2xl font-medium text-slate-900">{discussion.title}</h1>
-          </div>
-          <div className="flex flex-wrap gap-3">
-            <button type="button" className="secondary-button" onClick={() => navigate(`/discussions/${discussionId}/manage`)}>
-              Back to manage
+          <div className="flex items-start gap-3">
+            <button type="button" className="secondary-button gap-2 px-3" onClick={() => navigate(`/discussions/${discussionId}/manage`)}>
+              <BackIcon />
+              <span>Back</span>
             </button>
+            <div>
+              <p className="eyebrow">Sharing View</p>
+              <h1 className="text-2xl font-medium text-slate-900">{discussion.title}</h1>
+            </div>
           </div>
+          <div />
         </div>
 
         <div className="grid gap-6 lg:grid-cols-[320px_minmax(0,1fr)]">
           <aside className="glass-panel p-4">
             <h2 className="mb-4 text-lg font-medium text-slate-900">Sharing Order</h2>
             <div className="space-y-2">
-              {selectedIdeas.map((idea, index) => (
+              {shareGroups.map((group, index) => (
                 <button
-                  key={idea.id}
+                  key={group.id}
                   type="button"
                   className={`flex w-full cursor-pointer items-start gap-3 rounded-xl border px-3 py-3 text-left transition ${
                     index === activeIndex ? "border-slate-900 bg-slate-100" : "border-slate-200 bg-white"
@@ -107,34 +147,45 @@ export default function DiscussionShare() {
                   onClick={() => setActiveIndex(index)}
                 >
                   <span className="inline-flex h-7 min-w-7 items-center justify-center rounded-full bg-slate-900 px-2 text-xs font-semibold text-white">
-                    {idea.share_order ?? index + 1}
+                    {index + 1}
                   </span>
                   <div className="min-w-0">
-                    <p className="text-sm font-medium text-slate-900">{idea.group_id}</p>
-                    <p className="line-clamp-2 text-sm text-slate-600">{idea.content}</p>
+                    <p className="text-sm font-medium text-slate-900">{group.groupName}</p>
+                    <p className="text-sm text-slate-600">{group.ideas.length} ideas</p>
                   </div>
                 </button>
               ))}
-              {selectedIdeas.length === 0 ? <p className="text-sm text-slate-500">No selected ideas yet.</p> : null}
+              {shareGroups.length === 0 ? <p className="text-sm text-slate-500">No selected ideas yet.</p> : null}
             </div>
           </aside>
 
           <section className="glass-panel p-8">
-            {activeIdea ? (
+            {activeGroup ? (
               <>
-                <div className="mb-5">
+                <div className="mb-4">
                   <div>
                     <p className="eyebrow">Now Sharing</p>
-                    <h2 className="text-3xl font-medium text-slate-900">#{activeIdea.share_order ?? activeIndex + 1} · {activeIdea.group_id}</h2>
+                    <h2 className="whitespace-nowrap text-3xl font-medium text-slate-900">#{activeIndex + 1} · {activeGroup.groupName}</h2>
                   </div>
                 </div>
-                <div className="rounded-2xl border border-slate-200 bg-slate-50 p-8">
-                  <MarkdownContent content={activeIdea.content} className="[&_p]:text-2xl [&_li]:text-xl [&_h1]:text-3xl [&_h2]:text-2xl" />
+                <div className="space-y-3">
+                  {activeGroup.ideas.map((idea, index) => (
+                    <div key={idea.id} className="rounded-xl border border-slate-200 bg-slate-50 p-5">
+                      <div className="flex items-start gap-3">
+                        <span className="inline-flex h-8 min-w-8 items-center justify-center rounded-full bg-slate-900 px-2 text-sm font-semibold text-white">
+                          {index + 1}
+                        </span>
+                        <div className="min-w-0 flex-1">
+                          <MarkdownContent content={idea.content} className="[&_p]:mt-0 [&_p]:text-[1.4rem] [&_p]:leading-8 [&_li]:text-[1.2rem] [&_li]:leading-7 [&_h1]:mt-0 [&_h1]:text-[1.8rem] [&_h2]:mt-0 [&_h2]:text-[1.5rem]" />
+                        </div>
+                      </div>
+                    </div>
+                  ))}
                 </div>
-                <div className="mt-6 flex flex-wrap gap-4">
+                <div className="mt-5 flex items-end justify-center gap-4">
                   <button
                     type="button"
-                    className="secondary-button h-12 min-h-12 px-6 text-base"
+                    className="secondary-button h-11 min-h-11 px-5 text-base"
                     onClick={() => setActiveIndex((current) => Math.max(current - 1, 0))}
                     disabled={activeIndex === 0}
                   >
@@ -142,9 +193,9 @@ export default function DiscussionShare() {
                   </button>
                   <button
                     type="button"
-                    className="primary-button h-12 min-h-12 px-6 text-base"
-                    onClick={() => setActiveIndex((current) => Math.min(current + 1, selectedIdeas.length - 1))}
-                    disabled={activeIndex >= selectedIdeas.length - 1}
+                    className="primary-button h-11 min-h-11 px-5 text-base"
+                    onClick={() => setActiveIndex((current) => Math.min(current + 1, shareGroups.length - 1))}
+                    disabled={activeIndex >= shareGroups.length - 1}
                   >
                     Next
                   </button>

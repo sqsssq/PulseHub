@@ -57,15 +57,29 @@ function Dialog({ open, onClose, title, children }) {
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/35 p-4" onClick={onClose}>
-      <div className="w-full max-w-2xl rounded-2xl border border-[color:var(--color-line)] bg-white shadow-xl" onClick={(event) => event.stopPropagation()}>
-        <div className="flex items-center justify-between border-b border-[color:var(--color-line)] px-6 py-4">
-          <h2 className="text-lg font-medium text-slate-900">{title}</h2>
-          <button type="button" className="secondary-button px-3" onClick={onClose}>
-            Close
-          </button>
+    <div className="modal-overlay fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 px-4 py-8 backdrop-blur-[2px]" onClick={onClose}>
+      <div
+        className="modal-panel w-full max-w-xl overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-[0_28px_90px_rgba(15,23,42,0.22)]"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className="border-b border-slate-200 bg-[linear-gradient(180deg,#ffffff_0%,#f8fafc_100%)] px-6 py-5">
+          <div className="flex items-center justify-between gap-4">
+            <div>
+              <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">Confirm action</p>
+              <h2 className="mt-1 text-xl font-semibold text-slate-950">{title}</h2>
+            </div>
+            <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-red-50 text-red-500" aria-hidden="true">
+              <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" className="h-5 w-5">
+                <path d="M4.5 6h11" />
+                <path d="M8 3.75h4" />
+                <path d="M6.5 6l.6 9.25a1 1 0 0 0 1 .93h3.8a1 1 0 0 0 1-.93L13.5 6" />
+              </svg>
+            </div>
+          </div>
         </div>
-        <div className="px-6 py-5">{children}</div>
+        <div className="px-6 py-6">
+          {children}
+        </div>
       </div>
     </div>
   );
@@ -85,6 +99,7 @@ export default function Dashboard() {
   const [error, setError] = useState("");
   const [loadError, setLoadError] = useState("");
   const [showCreateDialog, setShowCreateDialog] = useState(false);
+  const [discussionPendingDelete, setDiscussionPendingDelete] = useState(null);
 
   useEffect(() => {
     Promise.all([getMe(), listDiscussions()])
@@ -128,14 +143,12 @@ export default function Dashboard() {
   }
 
   async function handleDeleteDiscussion(id) {
-    if (!window.confirm("Delete this discussion? This will remove its cards and join link.")) {
-      return;
-    }
     setDeletingId(id);
     setLoadError("");
     try {
       await deleteDiscussion(id);
       setDiscussions((current) => current.filter((discussion) => discussion.id !== id));
+      setDiscussionPendingDelete(null);
     } catch (err) {
       setLoadError(err.response?.data?.error || "Unable to delete this discussion.");
     } finally {
@@ -252,7 +265,7 @@ export default function Dashboard() {
                           type="button"
                           className="danger-button"
                           disabled={deletingId === discussion.id}
-                          onClick={() => handleDeleteDiscussion(discussion.id)}
+                          onClick={() => setDiscussionPendingDelete(discussion)}
                         >
                           {deletingId === discussion.id ? "Deleting..." : "Delete"}
                         </button>
@@ -300,6 +313,44 @@ export default function Dashboard() {
             </button>
           </div>
         </form>
+      </Dialog>
+
+      <Dialog
+        open={Boolean(discussionPendingDelete)}
+        onClose={() => !deletingId && setDiscussionPendingDelete(null)}
+        title="Delete discussion"
+      >
+        <div className="flex flex-col gap-5">
+          <div className="flex flex-col gap-2">
+            <p className="text-sm leading-6 text-slate-700">
+              Delete this discussion from your workspace view. Existing ideas, records, and join data will remain in the database.
+            </p>
+            {discussionPendingDelete ? (
+              <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4">
+                <p className="text-sm font-semibold text-slate-900">{discussionPendingDelete.title}</p>
+                <p className="mt-1 text-xs text-slate-500">{formatBeijingTimestamp(discussionPendingDelete.created_at)}</p>
+              </div>
+            ) : null}
+          </div>
+          <div className="flex justify-end gap-3">
+            <button
+              className="secondary-button"
+              type="button"
+              disabled={Boolean(deletingId)}
+              onClick={() => setDiscussionPendingDelete(null)}
+            >
+              Cancel
+            </button>
+            <button
+              className="danger-button"
+              type="button"
+              disabled={!discussionPendingDelete || Boolean(deletingId)}
+              onClick={() => discussionPendingDelete && handleDeleteDiscussion(discussionPendingDelete.id)}
+            >
+              {deletingId ? "Deleting..." : "Delete discussion"}
+            </button>
+          </div>
+        </div>
       </Dialog>
     </main>
   );

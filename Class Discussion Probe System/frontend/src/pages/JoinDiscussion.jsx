@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
-import { createJoinIdea, getJoinDiscussion } from "../api/client";
+import { createJoinIdea, getJoinDiscussion, registerJoinGroup } from "../api/client";
 import IdeaCard from "../components/IdeaCard";
 import MarkdownContent from "../components/MarkdownContent";
 import Timer from "../components/Timer";
@@ -25,26 +25,24 @@ export default function JoinDiscussion() {
   const { token } = useParams();
   const groupStorageKey = `pulsehub-group-name:${token}`;
   const authorStorageKey = `pulsehub-author-name:${token}`;
+  const groupSizeStorageKey = `pulsehub-group-size:${token}`;
   const [discussion, setDiscussion] = useState(null);
   const [groupInput, setGroupInput] = useState(() => window.localStorage.getItem(groupStorageKey) || "");
   const [groupName, setGroupName] = useState(() => window.localStorage.getItem(groupStorageKey) || "");
   const [nameInput, setNameInput] = useState(() => window.localStorage.getItem(authorStorageKey) || "");
   const [author, setAuthor] = useState(() => window.localStorage.getItem(authorStorageKey) || "");
+  const [groupSizeInput, setGroupSizeInput] = useState(() => window.localStorage.getItem(groupSizeStorageKey) || "");
+  const [groupSize, setGroupSize] = useState(() => window.localStorage.getItem(groupSizeStorageKey) || "");
   const [content, setContent] = useState("");
-  const [results, setResults] = useState([]);
   const [collapsed, setCollapsed] = useState(false);
   const [isPosting, setIsPosting] = useState(false);
+  const [isEntering, setIsEntering] = useState(false);
+  const [joinError, setJoinError] = useState("");
   const sentinelRef = useRef(null);
 
   useEffect(() => {
     getJoinDiscussion(token).then((data) => {
       setDiscussion(data);
-      if (data.discussion_ended) {
-        const selected = data.ideas
-          .filter((idea) => idea.is_selected)
-          .sort((a, b) => (a.share_order === null) - (b.share_order === null) || (a.share_order || 0) - (b.share_order || 0));
-        setResults(selected);
-      }
     });
   }, [token]);
 
@@ -73,16 +71,9 @@ export default function JoinDiscussion() {
     },
     session_updated: (payload) => {
       setDiscussion(payload);
-      if (payload.discussion_ended) {
-        const selected = payload.ideas
-          .filter((idea) => idea.is_selected)
-          .sort((a, b) => (a.share_order === null) - (b.share_order === null) || (a.share_order || 0) - (b.share_order || 0));
-        setResults(selected);
-      }
     },
     discussion_ended: (payload) => {
       setDiscussion((current) => (current ? { ...current, discussion_ended: true } : current));
-      setResults(payload.selected_ideas || []);
     },
   });
 
@@ -96,17 +87,35 @@ export default function JoinDiscussion() {
     [groupName, discussion?.ideas],
   );
 
-  function handleEnterGroup(event) {
+  async function handleEnterGroup(event) {
     event.preventDefault();
     const nextGroup = groupInput.trim();
     const nextName = nameInput.trim();
-    if (!nextGroup || !nextName) {
+    const nextGroupSize = String(groupSizeInput).trim();
+    const parsedGroupSize = Number.parseInt(nextGroupSize, 10);
+    if (!nextGroup || !nextName || !Number.isInteger(parsedGroupSize) || parsedGroupSize < 1 || parsedGroupSize > 50) {
+      setJoinError("Please enter your name, group name, and a valid group size between 1 and 50.");
       return;
     }
-    window.localStorage.setItem(groupStorageKey, nextGroup);
-    window.localStorage.setItem(authorStorageKey, nextName);
-    setGroupName(nextGroup);
-    setAuthor(nextName);
+    setJoinError("");
+    setIsEntering(true);
+    try {
+      const updatedDiscussion = await registerJoinGroup(token, {
+        group_id: nextGroup,
+        group_size: parsedGroupSize,
+      });
+      window.localStorage.setItem(groupStorageKey, nextGroup);
+      window.localStorage.setItem(authorStorageKey, nextName);
+      window.localStorage.setItem(groupSizeStorageKey, String(parsedGroupSize));
+      setDiscussion(updatedDiscussion);
+      setGroupName(nextGroup);
+      setAuthor(nextName);
+      setGroupSize(String(parsedGroupSize));
+    } catch (error) {
+      setJoinError(error.response?.data?.error || "Unable to enter this group right now.");
+    } finally {
+      setIsEntering(false);
+    }
   }
 
   async function handleSubmit(event) {
@@ -119,6 +128,7 @@ export default function JoinDiscussion() {
     try {
       const createdIdea = await createJoinIdea(token, {
         group_id: groupName,
+        group_size: groupSize ? Number.parseInt(groupSize, 10) : undefined,
         author_name: author.trim(),
         content: content.trim().slice(0, 300),
       });
@@ -133,7 +143,7 @@ export default function JoinDiscussion() {
     return <main className="page-loading">Loading discussion...</main>;
   }
 
-  if (!groupName || !author) {
+  if (!groupName || !author || !groupSize) {
     return (
       <main className="flex min-h-screen items-center justify-center bg-slate-50 p-4">
         <div className="w-full max-w-md">
@@ -156,7 +166,22 @@ export default function JoinDiscussion() {
                 <span className="text-sm font-semibold text-slate-700">Group name</span>
                 <input className="soft-input" value={groupInput} onChange={(e) => setGroupInput(e.target.value)} placeholder="e.g. Group 3" />
               </label>
-              <button className="primary-button" type="submit">Enter group space</button>
+              <label className="flex flex-col gap-2">
+                <span className="text-sm font-semibold text-slate-700">Group size</span>
+                <input
+                  className="soft-input"
+                  type="number"
+                  min="1"
+                  max="50"
+                  value={groupSizeInput}
+                  onChange={(e) => setGroupSizeInput(e.target.value)}
+                  placeholder="e.g. 4"
+                />
+              </label>
+              {joinError ? <p className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{joinError}</p> : null}
+              <button className="primary-button" type="submit" disabled={isEntering}>
+                {isEntering ? "Entering..." : "Enter group space"}
+              </button>
             </form>
           </section>
         </div>
@@ -175,6 +200,7 @@ export default function JoinDiscussion() {
             <div className="flex flex-wrap items-center gap-3">
               <span className="inline-flex min-h-8 items-center rounded-md bg-slate-100 px-3 font-medium text-slate-900">{author}</span>
               <span className="inline-flex min-h-8 items-center rounded-md bg-slate-100 px-3 font-medium text-slate-900">{groupName}</span>
+              <span className="inline-flex min-h-8 items-center rounded-md bg-slate-100 px-3 font-medium text-slate-900">{groupSize} members</span>
               <Timer seconds={displaySeconds} running={discussion.timer_running} />
             </div>
           }
@@ -263,22 +289,25 @@ export default function JoinDiscussion() {
                 <Timer seconds={displaySeconds} running={discussion.timer_running} />
               </div>
               <div className="mb-6 flex flex-wrap items-start justify-between gap-3">
-                <button type="button" className="secondary-button" onClick={() => { setGroupName(""); setAuthor(""); }}>
+                <button
+                  type="button"
+                  className="secondary-button"
+                  onClick={() => {
+                    window.localStorage.removeItem(groupStorageKey);
+                    window.localStorage.removeItem(authorStorageKey);
+                    window.localStorage.removeItem(groupSizeStorageKey);
+                    setGroupName("");
+                    setAuthor("");
+                    setGroupSize("");
+                  }}
+                >
                   Change profile
                 </button>
               </div>
-              {discussion.discussion_ended ? (
-                <div className="mt-6 flex flex-col gap-3">
-                  <h3 className="text-lg font-semibold text-slate-900">Selected ideas</h3>
-                  {results.length === 0 ? <p className="text-sm text-[color:var(--color-muted)]">No ideas were selected for sharing.</p> : null}
-                  {results.map((idea) => <IdeaCard key={idea.id} idea={idea} selected />)}
-                </div>
-              ) : (
-                <div className="space-y-3">
-                  {groupIdeas.map((idea) => <IdeaCard key={idea.id} idea={idea} />)}
-                  {groupIdeas.length === 0 ? <p className="py-8 text-center text-sm text-[color:var(--color-muted)]">No ideas submitted yet</p> : null}
-                </div>
-              )}
+              <div className="space-y-3">
+                {groupIdeas.map((idea) => <IdeaCard key={idea.id} idea={idea} />)}
+                {groupIdeas.length === 0 ? <p className="py-8 text-center text-sm text-[color:var(--color-muted)]">No ideas submitted yet</p> : null}
+              </div>
             </div>
           </section>
         </div>

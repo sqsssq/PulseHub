@@ -31,7 +31,9 @@ CORS(
     allow_headers=["Content-Type"],
     methods=["GET", "POST", "PATCH", "OPTIONS"],
 )
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode="threading")
+# Let Flask-SocketIO choose the best available async backend.
+# On servers with gevent installed, this will avoid falling back to threading.
+socketio = SocketIO(app, cors_allowed_origins="*")
 
 init_db()
 
@@ -105,6 +107,8 @@ def apply_discussion_updates(db, discussion: Discussion, payload: dict):
         discussion.timer_duration = max(int(payload["timer_duration"]), 1)
     if "groups" in payload:
         discussion.groups = json.dumps(payload.get("groups") or [])
+    if "group_sizes" in payload:
+        discussion.group_sizes = json.dumps(payload.get("group_sizes") or {})
     if "selected_groups" in payload:
         discussion.selected_groups = json.dumps(payload.get("selected_groups") or [])
     if "timer_running" in payload:
@@ -257,6 +261,7 @@ def create_discussion():
             topic=topic,
             join_token=generate_token(db),
             groups=json.dumps([]),
+            group_sizes=json.dumps({}),
             selected_groups=json.dumps([]),
             is_hidden=False,
             timer_duration=max(timer_minutes, 1) * 60,
@@ -356,6 +361,52 @@ def select_discussion_group(discussion_id: int):
         db.close()
 
 
+@app.post("/api/discussions/<int:discussion_id>/groups/set-selected-ideas")
+@require_auth
+def set_discussion_group_selected_ideas(discussion_id: int):
+    payload = request.get_json(force=True)
+    group_id = (payload.get("group_id") or "").strip()
+    selected_idea_ids = {int(value) for value in (payload.get("selected_idea_ids") or [])}
+    if not group_id:
+        return jsonify({"error": "group_id is required"}), 400
+
+    db = SessionLocal()
+    try:
+        discussion = get_owned_discussion(db, discussion_id)
+        if not discussion:
+            return jsonify({"error": "Discussion not found"}), 404
+
+        ideas = (
+            db.query(Idea)
+            .filter(Idea.discussion_id == discussion_id, Idea.group_id == group_id)
+            .order_by(Idea.submitted_at.asc())
+            .all()
+        )
+        if not ideas:
+            return jsonify({"error": "Group has no ideas"}), 404
+
+        valid_ids = {idea.id for idea in ideas}
+        selected_idea_ids &= valid_ids
+
+        selected_groups = [entry for entry in json.loads(discussion.selected_groups or "[]") if entry != group_id]
+        discussion.selected_groups = json.dumps(selected_groups)
+
+        for idea in ideas:
+            if idea.id in selected_idea_ids:
+                idea.is_selected = True
+            else:
+                idea.is_selected = False
+                idea.share_order = None
+
+        db.commit()
+        db.refresh(discussion)
+        serialized = serialize_discussion_for_owner(discussion)
+        socketio.emit("session_updated", serialized, room=str(discussion.id))
+        return jsonify(serialized)
+    finally:
+        db.close()
+
+
 @app.get("/api/join/<token>")
 def get_join_discussion(token: str):
     db = SessionLocal()
@@ -370,6 +421,47 @@ def get_join_discussion(token: str):
         db.close()
 
 
+@app.post("/api/join/<token>/groups")
+def register_join_group(token: str):
+    payload = request.get_json(force=True)
+    db = SessionLocal()
+    try:
+        discussion = db.query(Discussion).filter_by(join_token=token).first()
+        if not discussion:
+            return jsonify({"error": "Discussion not found"}), 404
+
+        group_id = (payload.get("group_id") or "").strip()
+        raw_group_size = payload.get("group_size")
+        if not group_id:
+            return jsonify({"error": "group_id is required"}), 400
+
+        try:
+            group_size = int(raw_group_size)
+        except (TypeError, ValueError):
+            return jsonify({"error": "group_size must be a number"}), 400
+
+        if group_size < 1 or group_size > 50:
+            return jsonify({"error": "group_size must be between 1 and 50"}), 400
+
+        groups = json.loads(discussion.groups or "[]")
+        group_sizes = json.loads(discussion.group_sizes or "{}")
+
+        if group_id not in groups:
+            groups.append(group_id)
+            discussion.groups = json.dumps(groups)
+
+        group_sizes[group_id] = group_size
+        discussion.group_sizes = json.dumps(group_sizes)
+
+        db.commit()
+        db.refresh(discussion)
+        serialized = serialize_discussion_for_owner(discussion)
+        socketio.emit("session_updated", serialized, room=str(discussion.id))
+        return jsonify(serialized)
+    finally:
+        db.close()
+
+
 @app.post("/api/join/<token>/ideas")
 def create_join_idea(token: str):
     payload = request.get_json(force=True)
@@ -380,14 +472,25 @@ def create_join_idea(token: str):
             return jsonify({"error": "Discussion not found"}), 404
         content = (payload.get("content") or "").strip()
         group_id = (payload.get("group_id") or "").strip()
+        raw_group_size = payload.get("group_size")
         if not content or not group_id:
             return jsonify({"error": "Group and content are required"}), 400
 
         groups = json.loads(discussion.groups)
+        group_sizes = json.loads(discussion.group_sizes or "{}")
         selected_groups = json.loads(discussion.selected_groups or "[]")
         if group_id not in groups:
             groups.append(group_id)
             discussion.groups = json.dumps(groups)
+        if raw_group_size not in (None, "", "null"):
+            try:
+                group_size = int(raw_group_size)
+            except (TypeError, ValueError):
+                return jsonify({"error": "group_size must be a number"}), 400
+            if group_size < 1 or group_size > 50:
+                return jsonify({"error": "group_size must be between 1 and 50"}), 400
+            group_sizes[group_id] = group_size
+            discussion.group_sizes = json.dumps(group_sizes)
 
         idea = Idea(
             discussion_id=discussion.id,

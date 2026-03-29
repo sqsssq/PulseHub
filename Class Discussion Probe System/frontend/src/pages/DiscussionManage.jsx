@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import MDEditor from "@uiw/react-md-editor";
 import { QRCodeSVG } from "qrcode.react";
 import { Navigate, useNavigate, useParams } from "react-router-dom";
-import { getDiscussion, getMe, updateDiscussion, updateDiscussionGroupSelection, updateIdea } from "../api/client";
+import { getDiscussion, getMe, setDiscussionGroupSelectedIdeas, updateDiscussion, updateDiscussionGroupSelection, updateIdea } from "../api/client";
 import Timer from "../components/Timer";
 import useSocket from "../hooks/useSocket";
 import useTimer from "../hooks/useTimer";
@@ -70,6 +70,14 @@ function ShareIcon() {
       <path d="M6 10.5v4a1.5 1.5 0 0 0 1.5 1.5h5A1.5 1.5 0 0 0 14 14.5v-4" />
       <path d="M10 12V4.5" />
       <path d="M7 7.5 10 4.5l3 3" />
+    </Icon>
+  );
+}
+
+function MinusIcon() {
+  return (
+    <Icon className="h-3.5 w-3.5">
+      <path d="M5 10h10" />
     </Icon>
   );
 }
@@ -277,29 +285,34 @@ export default function DiscussionManage() {
   const selectedEntities = useMemo(() => {
     const items = [];
     groups.forEach((group) => {
-      if (group.selected) {
-        items.push({
-          id: `group:${group.id}`,
-          type: "group",
-          name: group.name,
-          groupId: group.id,
-          ideaIds: group.ideas.map((idea) => idea.id),
-          sortOrder: Math.min(...group.ideas.map((idea) => idea.share_order ?? Number.MAX_SAFE_INTEGER)),
-        });
-      } else {
-        group.ideas.forEach((idea) => {
-          if (idea.is_selected) {
-            items.push({
-              id: `idea:${idea.id}`,
-              type: "idea",
-              name: `${group.name} - ${idea.content.slice(0, 50)}${idea.content.length > 50 ? "..." : ""}`,
-              groupId: group.id,
-              ideaIds: [idea.id],
-              sortOrder: idea.share_order ?? Number.MAX_SAFE_INTEGER,
-            });
-          }
-        });
+      const selectedIdeas = group.selected
+        ? [...group.ideas]
+        : group.ideas.filter((idea) => idea.is_selected);
+
+      if (selectedIdeas.length === 0) {
+        return;
       }
+
+      const orderedIdeas = [...selectedIdeas].sort(
+        (a, b) => parseServerDate(a.submitted_at) - parseServerDate(b.submitted_at),
+      );
+
+      const sortOrder = orderedIdeas.reduce(
+        (min, idea) => Math.min(min, idea.share_order ?? Number.MAX_SAFE_INTEGER),
+        Number.MAX_SAFE_INTEGER,
+      );
+
+      items.push({
+        id: `group:${group.id}`,
+        type: "group",
+        name: group.name,
+        groupId: group.id,
+        ideaIds: orderedIdeas.map((idea) => idea.id),
+        ideas: orderedIdeas,
+        ideaCount: orderedIdeas.length,
+        fullySelected: group.selected,
+        sortOrder,
+      });
     });
     return items.sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name));
   }, [groups]);
@@ -404,6 +417,24 @@ export default function DiscussionManage() {
 
   async function handleToggleIdeaSelection(idea) {
     await updateIdea(idea.id, { is_selected: !idea.is_selected, share_order: idea.is_selected ? null : idea.share_order });
+  }
+
+  async function handleRemoveIdeaFromShare(item, ideaId) {
+    try {
+      setActionError("");
+      const remainingIdeaIds = item.ideaIds.filter((id) => id !== ideaId);
+      if (item.fullySelected) {
+        const data = await setDiscussionGroupSelectedIdeas(discussionId, {
+          group_id: item.groupId,
+          selected_idea_ids: remainingIdeaIds,
+        });
+        setDiscussion(data);
+        return;
+      }
+      await updateIdea(ideaId, { is_selected: false, share_order: null });
+    } catch (err) {
+      setActionError(err.response?.data?.error || "Unable to remove this idea from sharing.");
+    }
   }
 
   function handleChangeSharePosition(itemId, nextPosition) {
@@ -597,17 +628,51 @@ export default function DiscussionManage() {
               <div className="mb-4 max-h-80 space-y-2 overflow-y-auto pr-1">
                 {shareItems.length === 0 ? <p className="rounded border border-slate-200 bg-slate-50 p-3 text-sm text-slate-500">No groups or ideas selected yet.</p> : null}
                 {shareItems.map((item, index) => (
-                  <div key={item.id} className="rounded border border-slate-200 bg-slate-100 p-2 text-sm">
-                    <div className="flex items-center gap-2">
+                  <div key={item.id} className="rounded border border-slate-200 bg-slate-100 p-3 text-sm">
+                    <div className="mb-2 flex items-center gap-2">
                       <span className="text-slate-500">#{index + 1}</span>
-                      <span className="line-clamp-1 text-slate-700">{item.name}</span>
+                      <span className="line-clamp-1 flex-1 text-slate-700">{item.name}</span>
+                      <span className="rounded-md bg-white px-2 py-0.5 text-xs text-slate-500">
+                        {item.fullySelected ? "Full group" : `${item.ideaCount} ideas`}
+                      </span>
+                      <select
+                        className="soft-input !w-14 min-w-14 max-w-14 flex-none px-1.5"
+                        value={index + 1}
+                        onChange={(event) => handleChangeSharePosition(item.id, event.target.value)}
+                      >
+                        {shareItems.map((_, optionIndex) => (
+                          <option key={optionIndex + 1} value={optionIndex + 1}>
+                            {optionIndex + 1}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className="space-y-2">
+                      {item.ideas.map((idea) => (
+                        <div key={idea.id} className="rounded-md border border-slate-200 bg-white px-3 py-2">
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="min-w-0">
+                              <p className="line-clamp-2 text-sm text-slate-700">{idea.content}</p>
+                              <p className="mt-1 text-xs text-slate-500">{formatBeijingTimestamp(idea.submitted_at)}</p>
+                            </div>
+                            <button
+                              type="button"
+                              className="secondary-button h-7 min-h-7 px-2"
+                              aria-label="Unshare idea"
+                              onClick={() => handleRemoveIdeaFromShare(item, idea.id)}
+                            >
+                              <MinusIcon />
+                            </button>
+                          </div>
+                        </div>
+                      ))}
                     </div>
                   </div>
                 ))}
               </div>
-              <button type="button" className="primary-button w-full gap-2" onClick={() => setShowShareDialog(true)}>
+              <button type="button" className="primary-button w-full gap-2" onClick={() => navigate(`/discussions/${discussionId}/share`)}>
                 <ShareIcon />
-                <span>Manage Sharing Order</span>
+                <span>Start Sharing</span>
               </button>
             </section>
           </div>
@@ -720,12 +785,24 @@ export default function DiscussionManage() {
 
       <Dialog open={showShareDialog} onClose={() => setShowShareDialog(false)} title="Manage Sharing Order" maxWidth="max-w-2xl">
         <div className="space-y-4">
-          <p className="text-sm text-slate-600">Arrange the order in which groups and ideas will be shared during presentation.</p>
+          <p className="text-sm text-slate-600">Arrange the order of groups. Ideas inside each group will stay in submission order.</p>
           <div className="max-h-96 space-y-2 overflow-y-auto">
             {shareItems.map((item, index) => (
               <div key={item.id} className="flex items-center gap-3 rounded-lg border border-slate-200 bg-slate-50 p-3">
                 <span className="font-mono text-sm text-slate-500">#{index + 1}</span>
-                <span className="flex-1 text-slate-900">{item.name}</span>
+                <div className="flex-1">
+                  <p className="text-slate-900">{item.name}</p>
+                  <p className="text-xs text-slate-500">
+                    {item.fullySelected ? "Full group selected" : `${item.ideaCount} selected ideas`} · internal order by submission time
+                  </p>
+                  <div className="mt-2 space-y-1">
+                    {item.ideas.map((idea) => (
+                      <p key={idea.id} className="line-clamp-1 text-xs text-slate-500">
+                        {idea.content}
+                      </p>
+                    ))}
+                  </div>
+                </div>
                 <select
                   className="soft-input w-24"
                   value={index + 1}

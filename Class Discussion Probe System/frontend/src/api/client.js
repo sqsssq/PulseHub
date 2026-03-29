@@ -57,8 +57,18 @@ export async function updateDiscussionGroupSelection(id, payload) {
   return data;
 }
 
+export async function setDiscussionGroupSelectedIdeas(id, payload) {
+  const { data } = await client.post(`/api/discussions/${id}/groups/set-selected-ideas`, payload);
+  return data;
+}
+
 export async function getJoinDiscussion(token) {
   const { data } = await client.get(`/api/join/${token}`);
+  return data;
+}
+
+export async function registerJoinGroup(token, payload) {
+  const { data } = await client.post(`/api/join/${token}/groups`, payload);
   return data;
 }
 

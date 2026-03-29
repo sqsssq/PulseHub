@@ -30,6 +30,7 @@ class Discussion(Base):
     topic = Column(Text, nullable=False)
     join_token = Column(String(16), nullable=False, unique=True, index=True)
     groups = Column(Text, nullable=False, default="[]")
+    group_sizes = Column(Text, nullable=False, default="{}")
     selected_groups = Column(Text, nullable=False, default="[]")
     is_hidden = Column(Boolean, nullable=False, default=False)
     timer_duration = Column(Integer, nullable=False, default=600)
@@ -70,6 +71,8 @@ def init_db() -> None:
     Base.metadata.create_all(bind=engine)
     with engine.begin() as connection:
         columns = {row[1] for row in connection.execute(text("PRAGMA table_info(discussions)")).fetchall()}
+        if "group_sizes" not in columns:
+            connection.execute(text("ALTER TABLE discussions ADD COLUMN group_sizes TEXT NOT NULL DEFAULT '{}'"))
         if "selected_groups" not in columns:
             connection.execute(text("ALTER TABLE discussions ADD COLUMN selected_groups TEXT NOT NULL DEFAULT '[]'"))
         if "is_hidden" not in columns:

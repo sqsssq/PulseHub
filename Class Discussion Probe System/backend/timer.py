@@ -39,6 +39,7 @@ def serialize_discussion(discussion: Discussion) -> dict:
         "topic": discussion.topic,
         "join_token": discussion.join_token,
         "groups": __import__("json").loads(discussion.groups),
+        "group_sizes": __import__("json").loads(discussion.group_sizes or "{}"),
         "selected_groups": __import__("json").loads(discussion.selected_groups or "[]"),
         "is_hidden": discussion.is_hidden,
         "timer_duration": discussion.timer_duration,
