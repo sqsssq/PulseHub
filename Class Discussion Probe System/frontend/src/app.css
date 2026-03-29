@@ -1,0 +1,115 @@
+@import "tailwindcss";
+
+@theme {
+  --font-display: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", Georgia, serif;
+  --font-sans: "Avenir Next", "Segoe UI", sans-serif;
+  --color-ink: #202534;
+  --color-muted: #677188;
+  --color-panel: rgba(255, 255, 255, 0.74);
+  --color-panel-strong: rgba(255, 255, 255, 0.9);
+  --color-line: rgba(50, 64, 96, 0.12);
+  --color-brand: #3850a6;
+  --color-brand-dark: #223678;
+  --color-accent: #dd8f5a;
+  --color-danger: #d86455;
+  --color-success: #2f8a62;
+}
+
+@layer base {
+  * {
+    box-sizing: border-box;
+  }
+
+  html {
+    min-height: 100%;
+  }
+
+  body {
+    min-height: 100vh;
+    margin: 0;
+    color: var(--color-ink);
+    background:
+      radial-gradient(circle at top left, rgba(244, 190, 132, 0.22), transparent 28%),
+      radial-gradient(circle at top right, rgba(93, 129, 255, 0.18), transparent 26%),
+      linear-gradient(180deg, #f7f0e8 0%, #f4f6fb 42%, #eef2f8 100%);
+    font-family: var(--font-sans);
+  }
+
+  body::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    background-image:
+      linear-gradient(rgba(255, 255, 255, 0.34) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255, 255, 255, 0.34) 1px, transparent 1px);
+    background-size: 28px 28px;
+    mask-image: linear-gradient(180deg, rgba(0, 0, 0, 0.7), transparent 85%);
+    opacity: 0.35;
+  }
+
+  button,
+  input,
+  textarea,
+  select {
+    font: inherit;
+  }
+}
+
+@layer utilities {
+  .glass-panel {
+    @apply rounded-[28px] border border-[color:var(--color-line)] bg-[color:var(--color-panel)] shadow-[0_18px_48px_rgba(40,54,85,0.12)] backdrop-blur-xl;
+  }
+
+  .glass-panel-strong {
+    @apply rounded-[28px] border border-white/30 bg-[color:var(--color-panel-strong)] shadow-[0_18px_48px_rgba(40,54,85,0.12)] backdrop-blur-xl;
+  }
+
+  .soft-input {
+    @apply min-h-[46px] w-full rounded-2xl border border-slate-300/70 bg-white/85 px-4 py-3 text-slate-800 shadow-[inset_0_1px_0_rgba(255,255,255,0.75)] outline-none transition focus:border-[color:var(--color-brand)]/40 focus:ring-4 focus:ring-[color:var(--color-brand)]/10;
+  }
+
+  .primary-button {
+    @apply inline-flex min-h-11 items-center justify-center rounded-2xl bg-linear-to-br from-[color:var(--color-brand)] to-[color:var(--color-brand-dark)] px-4 py-2.5 font-semibold text-white shadow-[0_10px_20px_rgba(56,80,166,0.18)] transition hover:-translate-y-0.5;
+  }
+
+  .secondary-button {
+    @apply inline-flex min-h-11 items-center justify-center rounded-2xl border border-slate-300/70 bg-white/70 px-4 py-2.5 font-semibold text-slate-800 transition hover:-translate-y-0.5;
+  }
+
+  .danger-button {
+    @apply inline-flex min-h-11 items-center justify-center rounded-2xl bg-linear-to-br from-[#e07363] to-[color:var(--color-danger)] px-4 py-2.5 font-semibold text-white transition hover:-translate-y-0.5;
+  }
+
+  .eyebrow {
+    @apply mb-2 text-[11px] font-bold uppercase tracking-[0.18em] text-[color:var(--color-brand)];
+  }
+}
+
+@layer components {
+  .w-md-editor {
+    @apply border-0 bg-transparent shadow-none;
+  }
+
+  .w-md-editor-toolbar {
+    @apply border-b border-slate-200/70 bg-slate-50/85 px-2 py-2;
+  }
+
+  .w-md-editor-toolbar li > button {
+    @apply rounded-lg;
+  }
+
+  .w-md-editor-content,
+  .w-md-editor-input,
+  .w-md-editor-text-pre,
+  .w-md-editor-text-input,
+  .w-md-editor-preview {
+    @apply bg-transparent;
+  }
+
+  .w-md-editor-text-input,
+  .w-md-editor-text-pre,
+  .w-md-editor-preview {
+    @apply px-4 py-4 text-[15px] leading-7 text-slate-800;
+  }
+}
