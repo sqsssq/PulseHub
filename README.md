@@ -23,7 +23,7 @@ pip install -r requirements.txt
 python app.py
 ```
 
-The backend runs on `http://127.0.0.1:5050`.
+The backend runs on `http://127.0.0.1:5050` by default and listens on `0.0.0.0`, so it can also be reached by your machine's LAN IP such as `http://192.168.x.x:5050`.
 
 ### 2. Start the frontend
 
@@ -36,6 +36,8 @@ npm run dev
 ```
 
 The frontend runs on the Vite local URL, usually `http://127.0.0.1:5173` or `http://localhost:5173`.
+During development the frontend proxies `/api` and `/socket.io` to the backend on `http://127.0.0.1:5050`, so login cookies stay on the same origin.
+Vite now listens on `0.0.0.0`, so you can also open the frontend from another device using your computer's IP, for example `http://192.168.x.x:5173`.
 
 ### 3. Open the pages
 
@@ -50,5 +52,6 @@ Current interaction flow:
 ### Notes
 
 - The probe uses SQLite and creates its local database at [`probe.db`](/Users/qingshi/Desktop/Project/ClassDiscussion/PulseHub/Class%20Discussion%20Probe%20System/backend/probe.db)
-- The frontend defaults to `http://127.0.0.1:5050` for API requests
-- If the backend is already running on another port, set `VITE_API_URL` before starting Vite
+- The frontend defaults to same-origin `/api` requests through the Vite dev proxy
+- If your backend is running on a different IP or machine, set `VITE_BACKEND_TARGET` before starting Vite
+- If you are not using the Vite proxy, set `VITE_API_URL` before starting Vite

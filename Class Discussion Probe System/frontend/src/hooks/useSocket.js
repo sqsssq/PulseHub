@@ -11,7 +11,8 @@ export default function useSocket(sessionCode, handlers = {}) {
       return null;
     }
     return io(BASE_URL, {
-      transports: ["websocket", "polling"],
+      path: "/socket.io",
+      transports: ["polling", "websocket"],
     });
   }, [sessionCode]);
 

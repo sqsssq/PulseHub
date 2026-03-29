@@ -1,43 +1,69 @@
 import axios from "axios";
 
-const BASE_URL = import.meta.env.VITE_API_URL || "http://127.0.0.1:5050";
+const BASE_URL = import.meta.env.VITE_API_URL || "";
 
 const client = axios.create({
   baseURL: BASE_URL,
+  withCredentials: true,
 });
 
-export async function createSession(payload) {
-  const { data } = await client.post("/api/sessions", payload);
+export async function register(payload) {
+  const { data } = await client.post("/api/auth/register", payload);
   return data;
 }
 
-export async function getCurrentSession() {
-  const { data } = await client.get("/api/session/current");
+export async function login(payload) {
+  const { data } = await client.post("/api/auth/login", payload);
   return data;
 }
 
-export async function updateCurrentSession(payload) {
-  const { data } = await client.patch("/api/session/current", payload);
+export async function logout() {
+  const { data } = await client.post("/api/auth/logout");
   return data;
 }
 
-export async function getSession(code) {
-  const { data } = await client.get(`/api/sessions/${code}`);
+export async function getMe() {
+  const { data } = await client.get("/api/me");
   return data;
 }
 
-export async function updateSession(code, payload) {
-  const { data } = await client.patch(`/api/sessions/${code}`, payload);
+export async function listDiscussions() {
+  const { data } = await client.get("/api/discussions");
   return data;
 }
 
-export async function createIdea(code, payload) {
-  const { data } = await client.post(`/api/sessions/${code}/ideas`, payload);
+export async function createDiscussion(payload) {
+  const { data } = await client.post("/api/discussions", payload);
   return data;
 }
 
-export async function createCurrentIdea(payload) {
-  const { data } = await client.post("/api/session/current/ideas", payload);
+export async function getDiscussion(id) {
+  const { data } = await client.get(`/api/discussions/${id}`);
+  return data;
+}
+
+export async function updateDiscussion(id, payload) {
+  const { data } = await client.patch(`/api/discussions/${id}`, payload);
+  return data;
+}
+
+export async function deleteDiscussion(id) {
+  const { data } = await client.delete(`/api/discussions/${id}`);
+  return data;
+}
+
+export async function updateDiscussionGroupSelection(id, payload) {
+  const { data } = await client.post(`/api/discussions/${id}/groups/select`, payload);
+  return data;
+}
+
+export async function getJoinDiscussion(token) {
+  const { data } = await client.get(`/api/join/${token}`);
+  return data;
+}
+
+export async function createJoinIdea(token, payload) {
+  const { data } = await client.post(`/api/join/${token}/ideas`, payload);
   return data;
 }
 

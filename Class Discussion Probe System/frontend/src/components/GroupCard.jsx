@@ -16,11 +16,11 @@ export default function GroupCard({
 
   return (
     <section
-      className={`glass-panel p-5 transition ${pulse ? "ring-2 ring-[color:var(--color-accent)]/40" : ""}`}
+      className={`glass-panel p-5 transition ${pulse ? "border-slate-400 bg-slate-50" : ""}`}
     >
       <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div className="flex items-start gap-3">
-          <span className={`mt-2 h-3 w-3 shrink-0 rounded-full shadow-[0_0_0_5px_rgba(255,255,255,0.55)] ${statusClass}`} />
+          <span className={`mt-2 h-2.5 w-2.5 shrink-0 rounded-full ${statusClass}`} />
           <div>
             <h2 className="text-lg font-semibold text-slate-900">{group}</h2>
             <p className="mt-1 text-sm text-[color:var(--color-muted)]">{ideas.length} cards in this space</p>

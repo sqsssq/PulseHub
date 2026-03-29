@@ -3,23 +3,31 @@ from __future__ import annotations
 import json
 import random
 from datetime import datetime
+from functools import wraps
 
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, request, session as auth_session
 from flask_cors import CORS
 from flask_socketio import SocketIO, join_room
+from werkzeug.security import check_password_hash, generate_password_hash
 
-from models import Idea, Session, SessionLocal, init_db
-from timer import build_discussion_payload, compute_seconds_remaining, start_timer_thread
+from models import Discussion, Idea, SessionLocal, User, init_db
+from timer import (
+    build_discussion_payload,
+    compute_seconds_remaining,
+    serialize_discussion,
+    start_timer_thread,
+)
 
-ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
-CURRENT_SESSION_ID = "ROOMA1"
-DEFAULT_TOPIC = "Discuss today's classroom prompt."
+TOKEN_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 DEFAULT_PORT = 5050
+
 app = Flask(__name__)
 app.config["SECRET_KEY"] = "probe-secret"
+app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
 CORS(
     app,
-    resources={r"/api/*": {"origins": [r"http://localhost:\d+", r"http://127\.0\.0\.1:\d+"]}},
+    supports_credentials=True,
+    resources={r"/api/*": {"origins": [r"http://localhost:\d+", r"http://127\.0\.0\.1:\d+", r"http://(?:\d{1,3}\.){3}\d{1,3}:\d+"]}},
     allow_headers=["Content-Type"],
     methods=["GET", "POST", "PATCH", "OPTIONS"],
 )
@@ -28,30 +36,19 @@ socketio = SocketIO(app, cors_allowed_origins="*", async_mode="threading")
 init_db()
 
 
-def get_or_create_current_session(db):
-    session = db.query(Session).filter_by(id=CURRENT_SESSION_ID).first()
-    if session:
-        return session
-
-    session = Session(
-        id=CURRENT_SESSION_ID,
-        topic=DEFAULT_TOPIC,
-        groups=json.dumps([]),
-        timer_duration=10 * 60,
-        timer_started_at=None,
-        timer_running=False,
-        discussion_ended=False,
-    )
-    db.add(session)
-    db.commit()
-    db.refresh(session)
-    return session
+def serialize_user(user: User) -> dict:
+    return {
+        "id": user.id,
+        "name": user.name,
+        "email": user.email,
+        "created_at": user.created_at.isoformat(),
+    }
 
 
 def serialize_idea(idea: Idea) -> dict:
     return {
         "id": idea.id,
-        "session_id": idea.session_id,
+        "discussion_id": idea.discussion_id,
         "group_id": idea.group_id,
         "author_name": idea.author_name,
         "content": idea.content,
@@ -61,34 +58,102 @@ def serialize_idea(idea: Idea) -> dict:
     }
 
 
-def serialize_session(session: Session) -> dict:
-    now = datetime.utcnow()
-    seconds_remaining = compute_seconds_remaining(session)
-    if not session.timer_running and not session.timer_started_at:
-        seconds_remaining = session.timer_duration
-    elif session.discussion_ended:
-        seconds_remaining = 0
-    return {
-        "id": session.id,
-        "topic": session.topic,
-        "groups": json.loads(session.groups),
-        "timer_duration": session.timer_duration,
-        "timer_started_at": session.timer_started_at.isoformat() if session.timer_started_at else None,
-        "timer_running": session.timer_running,
-        "discussion_ended": session.discussion_ended,
-        "created_at": session.created_at.isoformat(),
-        "seconds_remaining": max(seconds_remaining, 0),
-        "server_time": now.isoformat(),
-        "ideas": [serialize_idea(idea) for idea in session.ideas],
-    }
+def serialize_discussion_for_owner(discussion: Discussion) -> dict:
+    payload = serialize_discussion(discussion)
+    payload["join_url_path"] = f"/join/{discussion.join_token}"
+    return payload
 
 
-def generate_code(db) -> str:
+def generate_token(db) -> str:
     while True:
-        code = "".join(random.choice(ALPHABET) for _ in range(6))
-        exists = db.query(Session).filter_by(id=code).first()
+        token = "".join(random.choice(TOKEN_ALPHABET) for _ in range(10))
+        exists = db.query(Discussion).filter_by(join_token=token).first()
         if not exists:
-            return code
+            return token
+
+
+def current_user_id():
+    return auth_session.get("user_id")
+
+
+def require_auth(handler):
+    @wraps(handler)
+    def wrapped(*args, **kwargs):
+        if not current_user_id():
+            return jsonify({"error": "Authentication required"}), 401
+        return handler(*args, **kwargs)
+
+    return wrapped
+
+
+def get_owned_discussion(db, discussion_id: int):
+    return (
+        db.query(Discussion)
+        .filter(Discussion.id == discussion_id, Discussion.owner_id == current_user_id())
+        .first()
+    )
+
+
+def apply_discussion_updates(db, discussion: Discussion, payload: dict):
+    now = datetime.utcnow()
+
+    if "title" in payload:
+        discussion.title = (payload.get("title") or discussion.title).strip() or discussion.title
+    if "topic" in payload:
+        discussion.topic = (payload.get("topic") or discussion.topic).strip() or discussion.topic
+    if "timer_duration" in payload and not discussion.timer_running:
+        discussion.timer_duration = max(int(payload["timer_duration"]), 1)
+    if "groups" in payload:
+        discussion.groups = json.dumps(payload.get("groups") or [])
+    if "selected_groups" in payload:
+        discussion.selected_groups = json.dumps(payload.get("selected_groups") or [])
+    if "timer_running" in payload:
+        desired_running = bool(payload["timer_running"])
+        if desired_running and not discussion.timer_running:
+            discussion.timer_started_at = now
+            discussion.timer_running = True
+        elif not desired_running and discussion.timer_running:
+            elapsed = int((now - discussion.timer_started_at).total_seconds()) if discussion.timer_started_at else 0
+            discussion.timer_duration = max(discussion.timer_duration - elapsed, 0)
+            discussion.timer_started_at = None
+            discussion.timer_running = False
+        else:
+            discussion.timer_running = desired_running
+    if payload.get("reset_timer"):
+        discussion.timer_started_at = None
+        discussion.timer_running = False
+        discussion.timer_duration = max(int(payload.get("timer_duration", discussion.timer_duration)), 1)
+        discussion.discussion_ended = False
+    if payload.get("resume_discussion"):
+        discussion.discussion_ended = False
+        discussion.timer_duration = max(int(payload.get("timer_duration", discussion.timer_duration)), 1)
+        discussion.timer_started_at = now
+        discussion.timer_running = True
+    if payload.get("restart_discussion"):
+        discussion.discussion_ended = False
+        discussion.timer_duration = max(int(payload.get("timer_duration", discussion.timer_duration)), 1)
+        discussion.timer_started_at = now
+        discussion.timer_running = True
+    if "discussion_ended" in payload:
+        discussion.discussion_ended = bool(payload["discussion_ended"])
+        if discussion.discussion_ended:
+            discussion.timer_running = False
+            discussion.timer_started_at = None
+
+    db.commit()
+    db.refresh(discussion)
+
+    serialized = serialize_discussion_for_owner(discussion)
+    socketio.emit("session_updated", serialized, room=str(discussion.id))
+    seconds_remaining = 0 if discussion.discussion_ended else compute_seconds_remaining(discussion)
+    socketio.emit(
+        "timer_update",
+        {"timer_running": discussion.timer_running, "seconds_remaining": seconds_remaining},
+        room=str(discussion.id),
+    )
+    if discussion.discussion_ended:
+        socketio.emit("discussion_ended", build_discussion_payload(discussion), room=str(discussion.id))
+    return serialized
 
 
 @app.get("/health")
@@ -96,196 +161,263 @@ def health():
     return jsonify({"ok": True})
 
 
-@app.post("/api/sessions")
-def create_session():
+@app.post("/api/auth/register")
+def register():
     payload = request.get_json(force=True)
+    name = (payload.get("name") or "").strip()
+    email = (payload.get("email") or "").strip().lower()
+    password = payload.get("password") or ""
+    if not name or not email or len(password) < 6:
+        return jsonify({"error": "Name, email, and password (min 6 chars) are required"}), 400
+
+    db = SessionLocal()
+    try:
+        if db.query(User).filter_by(email=email).first():
+            return jsonify({"error": "Email already registered"}), 400
+        user = User(
+            name=name,
+            email=email,
+            password_hash=generate_password_hash(password, method="pbkdf2:sha256"),
+        )
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+        auth_session["user_id"] = user.id
+        return jsonify({"user": serialize_user(user)}), 201
+    finally:
+        db.close()
+
+
+@app.post("/api/auth/login")
+def login():
+    payload = request.get_json(force=True)
+    email = (payload.get("email") or "").strip().lower()
+    password = payload.get("password") or ""
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter_by(email=email).first()
+        if not user or not check_password_hash(user.password_hash, password):
+            return jsonify({"error": "Invalid email or password"}), 401
+        auth_session["user_id"] = user.id
+        return jsonify({"user": serialize_user(user)})
+    finally:
+        db.close()
+
+
+@app.post("/api/auth/logout")
+def logout():
+    auth_session.clear()
+    return jsonify({"ok": True})
+
+
+@app.get("/api/me")
+def me():
+    user_id = current_user_id()
+    if not user_id:
+        return jsonify({"user": None})
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter_by(id=user_id).first()
+        return jsonify({"user": serialize_user(user) if user else None})
+    finally:
+        db.close()
+
+
+@app.get("/api/discussions")
+@require_auth
+def list_discussions():
+    db = SessionLocal()
+    try:
+        discussions = (
+            db.query(Discussion)
+            .filter(Discussion.owner_id == current_user_id(), Discussion.is_hidden.is_(False))
+            .order_by(Discussion.created_at.desc())
+            .all()
+        )
+        return jsonify({"discussions": [serialize_discussion_for_owner(d) for d in discussions]})
+    finally:
+        db.close()
+
+
+@app.post("/api/discussions")
+@require_auth
+def create_discussion():
+    payload = request.get_json(force=True)
+    title = (payload.get("title") or "").strip()
     topic = (payload.get("topic") or "").strip()
-    groups = payload.get("groups") or []
     timer_minutes = int(payload.get("timer_minutes") or 10)
-    if not topic:
-        return jsonify({"error": "Topic is required"}), 400
-    if not groups:
-        return jsonify({"error": "At least one group is required"}), 400
+    if not title or not topic:
+        return jsonify({"error": "Title and topic are required"}), 400
 
     db = SessionLocal()
     try:
-        session = Session(
-            id=generate_code(db),
+        discussion = Discussion(
+            owner_id=current_user_id(),
+            title=title,
             topic=topic,
-            groups=json.dumps(groups),
+            join_token=generate_token(db),
+            groups=json.dumps([]),
+            selected_groups=json.dumps([]),
+            is_hidden=False,
             timer_duration=max(timer_minutes, 1) * 60,
-            timer_started_at=None,
-            timer_running=False,
-            discussion_ended=False,
         )
-        db.add(session)
+        db.add(discussion)
         db.commit()
-        db.refresh(session)
-        return jsonify(serialize_session(session)), 201
+        db.refresh(discussion)
+        return jsonify(serialize_discussion_for_owner(discussion)), 201
     finally:
         db.close()
 
 
-@app.get("/api/session/current")
-def get_current_session():
+@app.get("/api/discussions/<int:discussion_id>")
+@require_auth
+def get_discussion(discussion_id: int):
     db = SessionLocal()
     try:
-        session = get_or_create_current_session(db)
-        return jsonify(serialize_session(session))
+        discussion = get_owned_discussion(db, discussion_id)
+        if not discussion:
+            return jsonify({"error": "Discussion not found"}), 404
+        return jsonify(serialize_discussion_for_owner(discussion))
     finally:
         db.close()
 
 
-@app.patch("/api/session/current")
-def update_current_session():
-    db = SessionLocal()
-    try:
-        session = get_or_create_current_session(db)
-        return _update_session_from_payload(db, session, request.get_json(force=True))
-    finally:
-        db.close()
-
-
-@app.get("/api/sessions/<code>")
-def get_session(code: str):
-    db = SessionLocal()
-    try:
-        session = db.query(Session).filter_by(id=code.upper()).first()
-        if not session:
-            return jsonify({"error": "Session not found"}), 404
-        return jsonify(serialize_session(session))
-    finally:
-        db.close()
-
-
-@app.patch("/api/sessions/<code>")
-def update_session(code: str):
-    db = SessionLocal()
-    try:
-        session = db.query(Session).filter_by(id=code.upper()).first()
-        if not session:
-            return jsonify({"error": "Session not found"}), 404
-        return _update_session_from_payload(db, session, request.get_json(force=True))
-    finally:
-        db.close()
-
-
-def _update_session_from_payload(db, session: Session, payload: dict):
-    now = datetime.utcnow()
-
-    if "topic" in payload:
-        session.topic = (payload.get("topic") or session.topic).strip() or session.topic
-    if "timer_duration" in payload and not session.timer_running:
-        session.timer_duration = max(int(payload["timer_duration"]), 1)
-    if "groups" in payload:
-        session.groups = json.dumps(payload.get("groups") or [])
-    if "timer_running" in payload:
-        desired_running = bool(payload["timer_running"])
-        if desired_running and not session.timer_running:
-            session.timer_started_at = now
-            session.timer_running = True
-        elif not desired_running and session.timer_running:
-            elapsed = int((now - session.timer_started_at).total_seconds()) if session.timer_started_at else 0
-            session.timer_duration = max(session.timer_duration - elapsed, 0)
-            session.timer_started_at = None
-            session.timer_running = False
-        else:
-            session.timer_running = desired_running
-    if payload.get("reset_timer"):
-        session.timer_started_at = None
-        session.timer_running = False
-        session.timer_duration = max(int(payload.get("timer_duration", session.timer_duration)), 1)
-        session.discussion_ended = False
-    if "discussion_ended" in payload:
-        session.discussion_ended = bool(payload["discussion_ended"])
-        if session.discussion_ended:
-            session.timer_running = False
-            session.timer_started_at = None
-
-    db.commit()
-    db.refresh(session)
-
-    serialized_session = serialize_session(session)
-    socketio.emit("session_updated", serialized_session, room=session.id)
-    seconds_remaining = 0 if session.discussion_ended else compute_seconds_remaining(session)
-    socketio.emit(
-        "timer_update",
-        {
-            "timer_running": session.timer_running,
-            "seconds_remaining": seconds_remaining,
-        },
-        room=session.id,
-    )
-    if session.discussion_ended:
-        socketio.emit("discussion_ended", build_discussion_payload(session), room=session.id)
-    return jsonify(serialized_session)
-
-
-@app.post("/api/sessions/<code>/ideas")
-def create_idea(code: str):
+@app.patch("/api/discussions/<int:discussion_id>")
+@require_auth
+def update_discussion(discussion_id: int):
     payload = request.get_json(force=True)
     db = SessionLocal()
     try:
-        session = db.query(Session).filter_by(id=code.upper()).first()
-        if not session:
-            return jsonify({"error": "Session not found"}), 404
-        content = (payload.get("content") or "").strip()
-        group_id = (payload.get("group_id") or "").strip()
-        if not content or not group_id:
-            return jsonify({"error": "Group and content are required"}), 400
-        idea = Idea(
-            session_id=session.id,
-            group_id=group_id,
-            author_name=(payload.get("author_name") or "").strip() or None,
-            content=content[:300],
-        )
-        db.add(idea)
-        db.commit()
-        db.refresh(idea)
-        db.refresh(session)
-        serialized = serialize_idea(idea)
-        socketio.emit("session_updated", serialize_session(session), room=session.id)
-        socketio.emit("idea_added", serialized, room=session.id)
-        return jsonify(serialized), 201
+        discussion = get_owned_discussion(db, discussion_id)
+        if not discussion:
+            return jsonify({"error": "Discussion not found"}), 404
+        return jsonify(apply_discussion_updates(db, discussion, payload))
     finally:
         db.close()
 
 
-@app.post("/api/session/current/ideas")
-def create_current_idea():
+@app.delete("/api/discussions/<int:discussion_id>")
+@require_auth
+def delete_discussion(discussion_id: int):
+    db = SessionLocal()
+    try:
+        discussion = get_owned_discussion(db, discussion_id)
+        if not discussion:
+            return jsonify({"error": "Discussion not found"}), 404
+        discussion.is_hidden = True
+        db.commit()
+        return jsonify({"ok": True, "id": discussion_id})
+    finally:
+        db.close()
+
+
+@app.post("/api/discussions/<int:discussion_id>/groups/select")
+@require_auth
+def select_discussion_group(discussion_id: int):
+    payload = request.get_json(force=True)
+    group_id = (payload.get("group_id") or "").strip()
+    should_select = bool(payload.get("is_selected"))
+    if not group_id:
+        return jsonify({"error": "group_id is required"}), 400
+
+    db = SessionLocal()
+    try:
+        discussion = get_owned_discussion(db, discussion_id)
+        if not discussion:
+            return jsonify({"error": "Discussion not found"}), 404
+
+        ideas = (
+            db.query(Idea)
+            .filter(Idea.discussion_id == discussion_id, Idea.group_id == group_id)
+            .order_by(Idea.submitted_at.asc())
+            .all()
+        )
+        if not ideas:
+            return jsonify({"error": "Group has no ideas"}), 404
+
+        selected_groups = json.loads(discussion.selected_groups or "[]")
+        if should_select and group_id not in selected_groups:
+            selected_groups.append(group_id)
+        if not should_select:
+            selected_groups = [entry for entry in selected_groups if entry != group_id]
+        discussion.selected_groups = json.dumps(selected_groups)
+
+        for idea in ideas:
+            idea.is_selected = should_select
+            if not should_select:
+                idea.share_order = None
+
+        db.commit()
+        db.refresh(discussion)
+        serialized = serialize_discussion_for_owner(discussion)
+        socketio.emit("session_updated", serialized, room=str(discussion.id))
+        return jsonify(serialized)
+    finally:
+        db.close()
+
+
+@app.get("/api/join/<token>")
+def get_join_discussion(token: str):
+    db = SessionLocal()
+    try:
+        discussion = db.query(Discussion).filter_by(join_token=token).first()
+        if not discussion:
+            return jsonify({"error": "Discussion not found"}), 404
+        payload = serialize_discussion(discussion)
+        payload["join_url_path"] = f"/join/{discussion.join_token}"
+        return jsonify(payload)
+    finally:
+        db.close()
+
+
+@app.post("/api/join/<token>/ideas")
+def create_join_idea(token: str):
     payload = request.get_json(force=True)
     db = SessionLocal()
     try:
-        session = get_or_create_current_session(db)
+        discussion = db.query(Discussion).filter_by(join_token=token).first()
+        if not discussion:
+            return jsonify({"error": "Discussion not found"}), 404
         content = (payload.get("content") or "").strip()
         group_id = (payload.get("group_id") or "").strip()
         if not content or not group_id:
             return jsonify({"error": "Group and content are required"}), 400
 
-        groups = json.loads(session.groups)
+        groups = json.loads(discussion.groups)
+        selected_groups = json.loads(discussion.selected_groups or "[]")
         if group_id not in groups:
             groups.append(group_id)
-            session.groups = json.dumps(groups)
+            discussion.groups = json.dumps(groups)
 
         idea = Idea(
-            session_id=session.id,
+            discussion_id=discussion.id,
             group_id=group_id,
             author_name=(payload.get("author_name") or "").strip() or None,
             content=content[:300],
         )
+        if group_id in selected_groups:
+            max_share_order = (
+                db.query(Idea.share_order)
+                .filter(Idea.discussion_id == discussion.id, Idea.is_selected.is_(True), Idea.share_order.isnot(None))
+                .order_by(Idea.share_order.desc())
+                .first()
+            )
+            idea.is_selected = True
+            idea.share_order = (max_share_order[0] if max_share_order else 0) + 1
         db.add(idea)
         db.commit()
         db.refresh(idea)
-        db.refresh(session)
+        db.refresh(discussion)
         serialized = serialize_idea(idea)
-        socketio.emit("session_updated", serialize_session(session), room=session.id)
-        socketio.emit("idea_added", serialized, room=session.id)
+        socketio.emit("session_updated", serialize_discussion(discussion), room=str(discussion.id))
+        socketio.emit("idea_added", serialized, room=str(discussion.id))
         return jsonify(serialized), 201
     finally:
         db.close()
 
 
 @app.patch("/api/ideas/<int:idea_id>")
+@require_auth
 def update_idea(idea_id: int):
     payload = request.get_json(force=True)
     db = SessionLocal()
@@ -293,6 +425,9 @@ def update_idea(idea_id: int):
         idea = db.query(Idea).filter_by(id=idea_id).first()
         if not idea:
             return jsonify({"error": "Idea not found"}), 404
+        discussion = get_owned_discussion(db, idea.discussion_id)
+        if not discussion:
+            return jsonify({"error": "Discussion not found"}), 404
         if "is_selected" in payload:
             idea.is_selected = bool(payload["is_selected"])
             if not idea.is_selected:
@@ -304,12 +439,8 @@ def update_idea(idea_id: int):
         db.refresh(idea)
         socketio.emit(
             "idea_updated",
-            {
-                "id": idea.id,
-                "is_selected": idea.is_selected,
-                "share_order": idea.share_order,
-            },
-            room=idea.session_id,
+            {"id": idea.id, "is_selected": idea.is_selected, "share_order": idea.share_order},
+            room=str(idea.discussion_id),
         )
         return jsonify(serialize_idea(idea))
     finally:
@@ -318,9 +449,9 @@ def update_idea(idea_id: int):
 
 @socketio.on("join_session")
 def handle_join_session(data):
-    session_code = (data.get("session_code") or "").upper()
-    if session_code:
-        join_room(session_code)
+    room_id = str(data.get("session_code") or "")
+    if room_id:
+        join_room(room_id)
 
 
 start_timer_thread(app, socketio)
