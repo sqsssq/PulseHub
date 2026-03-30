@@ -44,6 +44,8 @@ export default function JoinDiscussion() {
   const [joinError, setJoinError] = useState("");
   const [submitError, setSubmitError] = useState("");
   const sentinelRef = useRef(null);
+  const imageInputRef = useRef(null);
+  const documentInputRef = useRef(null);
 
   useEffect(() => {
     getJoinDiscussion(token).then((data) => {
@@ -90,6 +92,26 @@ export default function JoinDiscussion() {
         (discussion?.ideas || []).filter((idea) => idea.group_id === groupName && idea.is_selected),
       ),
     [groupName, discussion?.ideas],
+  );
+  const filePreviews = useMemo(
+    () =>
+      selectedFiles.map((file) => ({
+        file,
+        url: file.type.startsWith("image/") ? URL.createObjectURL(file) : null,
+        isImage: file.type.startsWith("image/"),
+      })),
+    [selectedFiles],
+  );
+
+  useEffect(
+    () => () => {
+      filePreviews.forEach((preview) => {
+        if (preview.url) {
+          URL.revokeObjectURL(preview.url);
+        }
+      });
+    },
+    [filePreviews],
   );
 
   async function handleEnterGroup(event) {
@@ -262,45 +284,71 @@ export default function JoinDiscussion() {
                   <small className="text-sm text-[color:var(--color-muted)]">{content.length}/300</small>
                 </label>
                 <div className="grid gap-3 md:grid-cols-2">
-                  <label className="flex flex-col gap-2">
-                    <span className="text-sm font-medium text-slate-700">Images</span>
-                    <input
-                      className="soft-input"
-                      type="file"
-                      accept="image/png,image/jpeg,image/jpg,image/gif,image/webp"
-                      multiple
-                      onChange={handleFileChange}
-                      disabled={discussion.discussion_ended}
-                    />
-                  </label>
-                  <label className="flex flex-col gap-2">
-                    <span className="text-sm font-medium text-slate-700">Attachments</span>
-                    <input
-                      className="soft-input"
-                      type="file"
-                      accept=".pdf,.docx,.pptx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.presentationml.presentation"
-                      multiple
-                      onChange={handleFileChange}
-                      disabled={discussion.discussion_ended}
-                    />
-                  </label>
+                  <button
+                    type="button"
+                    className="secondary-button w-full"
+                    disabled={discussion.discussion_ended}
+                    onClick={() => imageInputRef.current?.click()}
+                  >
+                    Add images
+                  </button>
+                  <button
+                    type="button"
+                    className="secondary-button w-full"
+                    disabled={discussion.discussion_ended}
+                    onClick={() => documentInputRef.current?.click()}
+                  >
+                    Add files
+                  </button>
+                  <input
+                    ref={imageInputRef}
+                    className="hidden"
+                    type="file"
+                    accept="image/png,image/jpeg,image/jpg,image/gif,image/webp"
+                    multiple
+                    onChange={handleFileChange}
+                    disabled={discussion.discussion_ended}
+                  />
+                  <input
+                    ref={documentInputRef}
+                    className="hidden"
+                    type="file"
+                    accept=".pdf,.docx,.pptx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.presentationml.presentation"
+                    multiple
+                    onChange={handleFileChange}
+                    disabled={discussion.discussion_ended}
+                  />
                 </div>
-                {selectedFiles.length > 0 ? (
+                {filePreviews.length > 0 ? (
                   <div className="flex flex-col gap-2">
-                    <span className="text-sm font-medium text-slate-700">Files to upload</span>
-                    <div className="flex flex-wrap gap-2">
-                      {selectedFiles.map((file, index) => (
-                        <span key={`${file.name}-${file.size}-${index}`} className="inline-flex items-center gap-2 rounded-full bg-slate-100 px-3 py-1 text-sm text-slate-700">
-                          <span className="max-w-48 truncate">{file.name}</span>
-                          <button
-                            type="button"
-                            className="text-slate-500 transition hover:text-slate-900"
-                            onClick={() => removeSelectedFile(index)}
-                            disabled={discussion.discussion_ended}
-                          >
-                            ×
-                          </button>
-                        </span>
+                    <span className="text-sm font-medium text-slate-700">Upload preview</span>
+                    <div className="grid gap-3 md:grid-cols-2">
+                      {filePreviews.map((preview, index) => (
+                        <div key={`${preview.file.name}-${preview.file.size}-${index}`} className="overflow-hidden rounded-2xl border border-slate-200 bg-slate-50">
+                          {preview.isImage ? (
+                            <img src={preview.url} alt={preview.file.name} className="h-40 w-full object-cover" />
+                          ) : (
+                            <div className="flex h-40 items-center justify-center bg-white px-4 text-center">
+                              <div>
+                                <p className="text-sm font-semibold uppercase tracking-wide text-slate-500">
+                                  {preview.file.name.split(".").pop()}
+                                </p>
+                                <p className="mt-2 line-clamp-3 text-sm text-slate-700">{preview.file.name}</p>
+                              </div>
+                            </div>
+                          )}
+                          <div className="flex items-center justify-between gap-3 px-3 py-2">
+                            <p className="min-w-0 truncate text-sm font-medium text-slate-700">{preview.file.name}</p>
+                            <button
+                              type="button"
+                              className="text-sm font-medium text-slate-500 transition hover:text-slate-900"
+                              onClick={() => removeSelectedFile(index)}
+                              disabled={discussion.discussion_ended}
+                            >
+                              Remove
+                            </button>
+                          </div>
+                        </div>
                       ))}
                     </div>
                   </div>

@@ -28,6 +28,13 @@ const baseComponents = {
       {children}
     </a>
   ),
+  img: ({ src, alt }) => (
+    <img
+      src={src}
+      alt={alt || ""}
+      className="mt-4 max-h-96 w-auto max-w-full rounded-2xl border border-slate-200 bg-slate-50 object-contain first:mt-0"
+    />
+  ),
 };
 
 export default function MarkdownContent({ content, className = "", variant = "body" }) {
