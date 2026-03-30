@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import json
 import random
+import uuid
+from pathlib import Path
 from datetime import datetime
 from functools import wraps
 
-from flask import Flask, jsonify, request, session as auth_session
+from flask import Flask, jsonify, request, send_from_directory, session as auth_session
 from flask_cors import CORS
 from flask_socketio import SocketIO, join_room
 from werkzeug.security import check_password_hash, generate_password_hash
@@ -20,10 +22,16 @@ from timer import (
 
 TOKEN_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 DEFAULT_PORT = 5050
+BASE_DIR = Path(__file__).resolve().parent
+UPLOAD_DIR = BASE_DIR / "uploads"
+IMAGE_EXTENSIONS = {"png", "jpg", "jpeg", "gif", "webp"}
+DOCUMENT_EXTENSIONS = {"pdf", "docx", "pptx"}
+ALLOWED_UPLOAD_EXTENSIONS = IMAGE_EXTENSIONS | DOCUMENT_EXTENSIONS
 
 app = Flask(__name__)
 app.config["SECRET_KEY"] = "probe-secret"
 app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+app.config["MAX_CONTENT_LENGTH"] = 25 * 1024 * 1024
 CORS(
     app,
     supports_credentials=True,
@@ -36,6 +44,7 @@ CORS(
 socketio = SocketIO(app, cors_allowed_origins="*")
 
 init_db()
+UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def serialize_user(user: User) -> dict:
@@ -54,10 +63,39 @@ def serialize_idea(idea: Idea) -> dict:
         "group_id": idea.group_id,
         "author_name": idea.author_name,
         "content": idea.content,
+        "attachments": json.loads(idea.attachments or "[]"),
         "submitted_at": idea.submitted_at.isoformat(),
         "is_selected": idea.is_selected,
         "share_order": idea.share_order,
     }
+
+
+def save_uploaded_files(files) -> list[dict]:
+    attachments = []
+    for file_storage in files:
+        if not file_storage or not file_storage.filename:
+            continue
+
+        original_name = Path(file_storage.filename).name.strip()
+        if not original_name or "." not in original_name:
+            raise ValueError("Each upload must have a valid filename")
+
+        extension = original_name.rsplit(".", 1)[1].lower()
+        if extension not in ALLOWED_UPLOAD_EXTENSIONS:
+            raise ValueError("Only images, PDF, DOCX, and PPTX files are supported")
+
+        stored_name = f"{uuid.uuid4().hex}.{extension}"
+        destination = UPLOAD_DIR / stored_name
+        file_storage.save(destination)
+        attachments.append(
+            {
+                "name": original_name,
+                "url": f"/api/uploads/{stored_name}",
+                "kind": "image" if extension in IMAGE_EXTENSIONS else "document",
+                "extension": extension,
+            }
+        )
+    return attachments
 
 
 def serialize_discussion_for_owner(discussion: Discussion) -> dict:
@@ -163,6 +201,11 @@ def apply_discussion_updates(db, discussion: Discussion, payload: dict):
 @app.get("/health")
 def health():
     return jsonify({"ok": True})
+
+
+@app.get("/api/uploads/<path:filename>")
+def serve_upload(filename: str):
+    return send_from_directory(UPLOAD_DIR, filename, as_attachment=False)
 
 
 @app.post("/api/auth/register")
@@ -464,7 +507,12 @@ def register_join_group(token: str):
 
 @app.post("/api/join/<token>/ideas")
 def create_join_idea(token: str):
-    payload = request.get_json(force=True)
+    if request.content_type and "multipart/form-data" in request.content_type:
+        payload = request.form
+        uploaded_files = request.files.getlist("files")
+    else:
+        payload = request.get_json(force=True)
+        uploaded_files = []
     db = SessionLocal()
     try:
         discussion = db.query(Discussion).filter_by(join_token=token).first()
@@ -473,8 +521,8 @@ def create_join_idea(token: str):
         content = (payload.get("content") or "").strip()
         group_id = (payload.get("group_id") or "").strip()
         raw_group_size = payload.get("group_size")
-        if not content or not group_id:
-            return jsonify({"error": "Group and content are required"}), 400
+        if not group_id:
+            return jsonify({"error": "Group is required"}), 400
 
         groups = json.loads(discussion.groups)
         group_sizes = json.loads(discussion.group_sizes or "{}")
@@ -491,12 +539,19 @@ def create_join_idea(token: str):
                 return jsonify({"error": "group_size must be between 1 and 50"}), 400
             group_sizes[group_id] = group_size
             discussion.group_sizes = json.dumps(group_sizes)
+        try:
+            attachments = save_uploaded_files(uploaded_files)
+        except ValueError as error:
+            return jsonify({"error": str(error)}), 400
+        if not content and not attachments:
+            return jsonify({"error": "Please add text or upload at least one file"}), 400
 
         idea = Idea(
             discussion_id=discussion.id,
             group_id=group_id,
             author_name=(payload.get("author_name") or "").strip() or None,
             content=content[:300],
+            attachments=json.dumps(attachments),
         )
         if group_id in selected_groups:
             max_share_order = (

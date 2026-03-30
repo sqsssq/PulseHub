@@ -1,3 +1,6 @@
+import "@uiw/react-md-editor/markdown-editor.css";
+
+import MDEditor from "@uiw/react-md-editor";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 import { createJoinIdea, getJoinDiscussion, registerJoinGroup } from "../api/client";
@@ -34,10 +37,12 @@ export default function JoinDiscussion() {
   const [groupSizeInput, setGroupSizeInput] = useState(() => window.localStorage.getItem(groupSizeStorageKey) || "");
   const [groupSize, setGroupSize] = useState(() => window.localStorage.getItem(groupSizeStorageKey) || "");
   const [content, setContent] = useState("");
+  const [selectedFiles, setSelectedFiles] = useState([]);
   const [collapsed, setCollapsed] = useState(false);
   const [isPosting, setIsPosting] = useState(false);
   const [isEntering, setIsEntering] = useState(false);
   const [joinError, setJoinError] = useState("");
+  const [submitError, setSubmitError] = useState("");
   const sentinelRef = useRef(null);
 
   useEffect(() => {
@@ -120,23 +125,46 @@ export default function JoinDiscussion() {
 
   async function handleSubmit(event) {
     event.preventDefault();
-    if (!content.trim() || !groupName || !author.trim() || isPosting) {
+    if ((!content.trim() && selectedFiles.length === 0) || !groupName || !author.trim() || isPosting) {
+      setSubmitError("Please add text or upload at least one file before posting.");
       return;
     }
 
+    setSubmitError("");
     setIsPosting(true);
     try {
-      const createdIdea = await createJoinIdea(token, {
-        group_id: groupName,
-        group_size: groupSize ? Number.parseInt(groupSize, 10) : undefined,
-        author_name: author.trim(),
-        content: content.trim().slice(0, 300),
-      });
+      const formData = new FormData();
+      formData.append("group_id", groupName);
+      if (groupSize) {
+        formData.append("group_size", String(Number.parseInt(groupSize, 10)));
+      }
+      formData.append("author_name", author.trim());
+      formData.append("content", content.trim().slice(0, 300));
+      selectedFiles.forEach((file) => formData.append("files", file));
+
+      const createdIdea = await createJoinIdea(token, formData);
       setDiscussion((current) => (current ? { ...current, ideas: mergeIdeas(current.ideas, [createdIdea]) } : current));
       setContent("");
+      setSelectedFiles([]);
+      setSubmitError("");
+    } catch (error) {
+      setSubmitError(error.response?.data?.error || "Unable to post this card right now.");
     } finally {
       setIsPosting(false);
     }
+  }
+
+  function handleFileChange(event) {
+    const nextFiles = Array.from(event.target.files || []).filter(Boolean);
+    if (!nextFiles.length) {
+      return;
+    }
+    setSelectedFiles((current) => [...current, ...nextFiles]);
+    event.target.value = "";
+  }
+
+  function removeSelectedFile(indexToRemove) {
+    setSelectedFiles((current) => current.filter((_, index) => index !== indexToRemove));
   }
 
   if (!discussion) {
@@ -218,16 +246,66 @@ export default function JoinDiscussion() {
               <form className="flex flex-col gap-5" onSubmit={handleSubmit}>
                 <label className="flex flex-col gap-2">
                   <span className="text-sm font-medium text-slate-700">Card content (Markdown supported)</span>
-                  <textarea
-                    className="soft-input min-h-48 text-base disabled:cursor-not-allowed disabled:opacity-60"
-                    value={content}
-                    onChange={(e) => setContent(e.target.value.slice(0, 300))}
-                    placeholder="Type your idea here..."
-                    rows={7}
-                    disabled={discussion.discussion_ended}
-                  />
+                  <div data-color-mode="light" className="overflow-hidden rounded-xl border border-[color:var(--color-line)] bg-white disabled:opacity-60">
+                    <MDEditor
+                      value={content}
+                      onChange={(value) => setContent((value || "").slice(0, 300))}
+                      preview="edit"
+                      height={280}
+                      visibleDragbar={false}
+                      textareaProps={{
+                        placeholder: "Type your idea here...",
+                        disabled: discussion.discussion_ended,
+                      }}
+                    />
+                  </div>
                   <small className="text-sm text-[color:var(--color-muted)]">{content.length}/300</small>
                 </label>
+                <div className="grid gap-3 md:grid-cols-2">
+                  <label className="flex flex-col gap-2">
+                    <span className="text-sm font-medium text-slate-700">Images</span>
+                    <input
+                      className="soft-input"
+                      type="file"
+                      accept="image/png,image/jpeg,image/jpg,image/gif,image/webp"
+                      multiple
+                      onChange={handleFileChange}
+                      disabled={discussion.discussion_ended}
+                    />
+                  </label>
+                  <label className="flex flex-col gap-2">
+                    <span className="text-sm font-medium text-slate-700">Attachments</span>
+                    <input
+                      className="soft-input"
+                      type="file"
+                      accept=".pdf,.docx,.pptx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.presentationml.presentation"
+                      multiple
+                      onChange={handleFileChange}
+                      disabled={discussion.discussion_ended}
+                    />
+                  </label>
+                </div>
+                {selectedFiles.length > 0 ? (
+                  <div className="flex flex-col gap-2">
+                    <span className="text-sm font-medium text-slate-700">Files to upload</span>
+                    <div className="flex flex-wrap gap-2">
+                      {selectedFiles.map((file, index) => (
+                        <span key={`${file.name}-${file.size}-${index}`} className="inline-flex items-center gap-2 rounded-full bg-slate-100 px-3 py-1 text-sm text-slate-700">
+                          <span className="max-w-48 truncate">{file.name}</span>
+                          <button
+                            type="button"
+                            className="text-slate-500 transition hover:text-slate-900"
+                            onClick={() => removeSelectedFile(index)}
+                            disabled={discussion.discussion_ended}
+                          >
+                            ×
+                          </button>
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+                {submitError ? <p className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{submitError}</p> : null}
                 <label className="flex flex-col gap-2">
                   <span className="text-sm font-medium text-slate-700">Your name</span>
                   <input

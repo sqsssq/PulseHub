@@ -3,7 +3,7 @@ import MarkdownContent from "./MarkdownContent";
 export default function TopicBanner({ topic, collapsed = false, meta }) {
   return (
     <header
-      className={`sticky top-0 z-30 mb-5 flex flex-col gap-4 border-b border-[color:var(--color-line)] bg-white px-5 md:flex-row md:items-center md:justify-between md:px-6 ${
+      className={`z-30 mb-5 flex flex-col gap-4 border-b border-[color:var(--color-line)] bg-white px-5 md:sticky md:top-0 md:flex-row md:items-center md:justify-between md:px-6 ${
         collapsed ? "py-3" : "py-4"
       }`}
     >

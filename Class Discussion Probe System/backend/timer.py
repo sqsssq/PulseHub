@@ -22,6 +22,7 @@ def serialize_idea(idea) -> dict:
         "group_id": idea.group_id,
         "author_name": idea.author_name,
         "content": idea.content,
+        "attachments": __import__("json").loads(idea.attachments or "[]"),
         "submitted_at": idea.submitted_at.isoformat(),
         "is_selected": idea.is_selected,
         "share_order": idea.share_order,

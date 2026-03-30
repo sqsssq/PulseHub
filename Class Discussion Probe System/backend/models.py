@@ -56,6 +56,7 @@ class Idea(Base):
     group_id = Column(String(120), nullable=False, index=True)
     author_name = Column(String(100), nullable=True)
     content = Column(Text, nullable=False)
+    attachments = Column(Text, nullable=False, default="[]")
     submitted_at = Column(DateTime, nullable=False, default=datetime.utcnow, index=True)
     is_selected = Column(Boolean, nullable=False, default=False)
     share_order = Column(Integer, nullable=True)
@@ -70,7 +71,10 @@ SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
 def init_db() -> None:
     Base.metadata.create_all(bind=engine)
     with engine.begin() as connection:
+        idea_columns = {row[1] for row in connection.execute(text("PRAGMA table_info(discussion_ideas)")).fetchall()}
         columns = {row[1] for row in connection.execute(text("PRAGMA table_info(discussions)")).fetchall()}
+        if "attachments" not in idea_columns:
+            connection.execute(text("ALTER TABLE discussion_ideas ADD COLUMN attachments TEXT NOT NULL DEFAULT '[]'"))
         if "group_sizes" not in columns:
             connection.execute(text("ALTER TABLE discussions ADD COLUMN group_sizes TEXT NOT NULL DEFAULT '{}'"))
         if "selected_groups" not in columns:
