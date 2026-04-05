@@ -183,7 +183,9 @@ export default function Dashboard() {
           <div>
             <p className="eyebrow">Teacher Workspace</p>
             <h1 className="text-3xl font-medium text-slate-900">Teacher Workspace</h1>
-            <p className="mt-1 text-slate-600">Welcome back, {user.name}. Create and manage your student discussion sessions.</p>
+            <p className="mt-1 text-slate-600">
+              Welcome back, {user.name}. {user.is_superadmin ? "You can review every teacher's discussions from here." : "Create and manage your student discussion sessions."}
+            </p>
           </div>
           <div className="flex flex-wrap gap-3">
             <button className="primary-button" type="button" onClick={() => { setError(""); setShowCreateDialog(true); }}>
@@ -215,7 +217,7 @@ export default function Dashboard() {
         <section className="glass-panel p-6">
           <div className="mb-5 flex items-center justify-between gap-3">
             <div>
-              <p className="eyebrow">Your Discussions</p>
+              <p className="eyebrow">{user.is_superadmin ? "All Teachers" : "Your Discussions"}</p>
               <h2 className="text-xl font-medium text-slate-900">All Discussions</h2>
             </div>
           </div>
@@ -243,6 +245,13 @@ export default function Dashboard() {
                       </div>
                       <p className="mt-1 line-clamp-2 text-sm text-[color:var(--color-muted)]">{discussion.topic.replace(/[#*_`>-]/g, " ").trim()}</p>
                       <p className="mt-3 text-sm text-[color:var(--color-muted)]">{formatBeijingTimestamp(discussion.created_at)}</p>
+                      {user.is_superadmin && discussion.owner ? (
+                        <p className="mt-2 text-sm text-slate-600">
+                          Created by <span className="font-medium text-slate-800">{discussion.owner.name}</span>
+                          {" · "}
+                          {discussion.owner.email}
+                        </p>
+                      ) : null}
                       <div className="mt-3 flex items-stretch gap-2">
                         <div className="min-w-0 flex-1 break-all rounded-md bg-slate-100 px-4 py-3 text-sm text-slate-700">{joinUrl}</div>
                         <button

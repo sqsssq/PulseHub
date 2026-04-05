@@ -16,6 +16,7 @@ class User(Base):
     name = Column(String(120), nullable=False)
     email = Column(String(255), nullable=False, unique=True, index=True)
     password_hash = Column(String(255), nullable=False)
+    is_superadmin = Column(Boolean, nullable=False, default=False)
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
 
     discussions = relationship("Discussion", back_populates="owner", cascade="all, delete-orphan")
@@ -71,8 +72,11 @@ SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
 def init_db() -> None:
     Base.metadata.create_all(bind=engine)
     with engine.begin() as connection:
+        user_columns = {row[1] for row in connection.execute(text("PRAGMA table_info(users)")).fetchall()}
         idea_columns = {row[1] for row in connection.execute(text("PRAGMA table_info(discussion_ideas)")).fetchall()}
         columns = {row[1] for row in connection.execute(text("PRAGMA table_info(discussions)")).fetchall()}
+        if "is_superadmin" not in user_columns:
+            connection.execute(text("ALTER TABLE users ADD COLUMN is_superadmin BOOLEAN NOT NULL DEFAULT 0"))
         if "attachments" not in idea_columns:
             connection.execute(text("ALTER TABLE discussion_ideas ADD COLUMN attachments TEXT NOT NULL DEFAULT '[]'"))
         if "group_sizes" not in columns:

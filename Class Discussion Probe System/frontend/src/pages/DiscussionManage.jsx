@@ -5,6 +5,7 @@ import MDEditor from "@uiw/react-md-editor";
 import { QRCodeSVG } from "qrcode.react";
 import { Navigate, useNavigate, useParams } from "react-router-dom";
 import { getDiscussion, getMe, setDiscussionGroupSelectedIdeas, updateDiscussion, updateDiscussionGroupSelection, updateIdea } from "../api/client";
+import IdeaCard from "../components/IdeaCard";
 import Timer from "../components/Timer";
 import useSocket from "../hooks/useSocket";
 import useTimer from "../hooks/useTimer";
@@ -706,23 +707,22 @@ export default function DiscussionManage() {
                       idea.is_selected || idea.groupSelected ? "border-slate-400 bg-slate-50" : "border-slate-200 bg-white hover:shadow-sm"
                     }`}
                   >
-                    <div className="flex items-start gap-3">
+                    <div className="mb-3 flex items-center gap-2">
                       <input
                         type="checkbox"
-                        className="mt-1 h-4 w-4 accent-slate-900"
+                        className="h-4 w-4 accent-slate-900"
                         checked={idea.is_selected || idea.groupSelected}
                         disabled={idea.groupSelected}
                         onChange={() => handleToggleIdeaSelection(idea)}
                       />
-                      <div className="flex-1">
-                        <div className="mb-2 flex items-center gap-2">
-                          <div className={`h-3 w-3 rounded-full ${idea.groupColor}`} />
-                          <span className="text-sm text-slate-900">{idea.groupName}</span>
-                          <span className="text-xs text-slate-500">{formatBeijingTimestamp(idea.submitted_at)}</span>
-                        </div>
-                        <p className="whitespace-pre-wrap text-slate-700">{idea.content}</p>
-                      </div>
+                      <div className={`h-3 w-3 rounded-full ${idea.groupColor}`} />
+                      <span className="text-sm font-medium text-slate-900">{idea.groupName}</span>
+                      <span className="text-xs text-slate-500">{formatBeijingTimestamp(idea.submitted_at)}</span>
+                      {idea.groupSelected ? (
+                        <span className="rounded-md bg-slate-200 px-2 py-0.5 text-xs text-slate-600">Full group selected</span>
+                      ) : null}
                     </div>
+                    <IdeaCard idea={idea} compact />
                   </div>
                 ))}
                 {sortedFilteredIdeas.length === 0 ? <p className="py-8 text-center text-sm text-slate-500">No ideas match the current filter.</p> : null}

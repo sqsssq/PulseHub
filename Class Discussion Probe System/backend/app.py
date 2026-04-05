@@ -22,6 +22,9 @@ from timer import (
 
 TOKEN_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 DEFAULT_PORT = 5050
+SUPERADMIN_NAME = "Super Admin"
+SUPERADMIN_EMAIL = "superadmin@classdiscussion.local"
+SUPERADMIN_PASSWORD = "SuperAdmin123!"
 BASE_DIR = Path(__file__).resolve().parent
 UPLOAD_DIR = BASE_DIR / "uploads"
 IMAGE_EXTENSIONS = {"png", "jpg", "jpeg", "gif", "webp"}
@@ -52,6 +55,7 @@ def serialize_user(user: User) -> dict:
         "id": user.id,
         "name": user.name,
         "email": user.email,
+        "is_superadmin": bool(user.is_superadmin),
         "created_at": user.created_at.isoformat(),
     }
 
@@ -101,6 +105,11 @@ def save_uploaded_files(files) -> list[dict]:
 def serialize_discussion_for_owner(discussion: Discussion) -> dict:
     payload = serialize_discussion(discussion)
     payload["join_url_path"] = f"/join/{discussion.join_token}"
+    payload["owner"] = {
+        "id": discussion.owner.id,
+        "name": discussion.owner.name,
+        "email": discussion.owner.email,
+    } if discussion.owner else None
     return payload
 
 
@@ -116,6 +125,10 @@ def current_user_id():
     return auth_session.get("user_id")
 
 
+def current_user_is_superadmin():
+    return bool(auth_session.get("is_superadmin"))
+
+
 def require_auth(handler):
     @wraps(handler)
     def wrapped(*args, **kwargs):
@@ -126,12 +139,37 @@ def require_auth(handler):
     return wrapped
 
 
-def get_owned_discussion(db, discussion_id: int):
-    return (
-        db.query(Discussion)
-        .filter(Discussion.id == discussion_id, Discussion.owner_id == current_user_id())
-        .first()
-    )
+def get_accessible_discussion(db, discussion_id: int):
+    query = db.query(Discussion).filter(Discussion.id == discussion_id)
+    if not current_user_is_superadmin():
+        query = query.filter(Discussion.owner_id == current_user_id())
+    return query.first()
+
+
+def ensure_superadmin_account():
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter_by(email=SUPERADMIN_EMAIL).first()
+        password_hash = generate_password_hash(SUPERADMIN_PASSWORD, method="pbkdf2:sha256")
+        if user:
+            user.name = SUPERADMIN_NAME
+            user.is_superadmin = True
+            user.password_hash = password_hash
+        else:
+            db.add(
+                User(
+                    name=SUPERADMIN_NAME,
+                    email=SUPERADMIN_EMAIL,
+                    password_hash=password_hash,
+                    is_superadmin=True,
+                )
+            )
+        db.commit()
+    finally:
+        db.close()
+
+
+ensure_superadmin_account()
 
 
 def apply_discussion_updates(db, discussion: Discussion, payload: dict):
@@ -230,6 +268,7 @@ def register():
         db.commit()
         db.refresh(user)
         auth_session["user_id"] = user.id
+        auth_session["is_superadmin"] = bool(user.is_superadmin)
         return jsonify({"user": serialize_user(user)}), 201
     finally:
         db.close()
@@ -246,6 +285,7 @@ def login():
         if not user or not check_password_hash(user.password_hash, password):
             return jsonify({"error": "Invalid email or password"}), 401
         auth_session["user_id"] = user.id
+        auth_session["is_superadmin"] = bool(user.is_superadmin)
         return jsonify({"user": serialize_user(user)})
     finally:
         db.close()
@@ -275,12 +315,10 @@ def me():
 def list_discussions():
     db = SessionLocal()
     try:
-        discussions = (
-            db.query(Discussion)
-            .filter(Discussion.owner_id == current_user_id(), Discussion.is_hidden.is_(False))
-            .order_by(Discussion.created_at.desc())
-            .all()
-        )
+        query = db.query(Discussion).filter(Discussion.is_hidden.is_(False))
+        if not current_user_is_superadmin():
+            query = query.filter(Discussion.owner_id == current_user_id())
+        discussions = query.order_by(Discussion.created_at.desc()).all()
         return jsonify({"discussions": [serialize_discussion_for_owner(d) for d in discussions]})
     finally:
         db.close()
@@ -322,7 +360,7 @@ def create_discussion():
 def get_discussion(discussion_id: int):
     db = SessionLocal()
     try:
-        discussion = get_owned_discussion(db, discussion_id)
+        discussion = get_accessible_discussion(db, discussion_id)
         if not discussion:
             return jsonify({"error": "Discussion not found"}), 404
         return jsonify(serialize_discussion_for_owner(discussion))
@@ -336,7 +374,7 @@ def update_discussion(discussion_id: int):
     payload = request.get_json(force=True)
     db = SessionLocal()
     try:
-        discussion = get_owned_discussion(db, discussion_id)
+        discussion = get_accessible_discussion(db, discussion_id)
         if not discussion:
             return jsonify({"error": "Discussion not found"}), 404
         return jsonify(apply_discussion_updates(db, discussion, payload))
@@ -349,7 +387,7 @@ def update_discussion(discussion_id: int):
 def delete_discussion(discussion_id: int):
     db = SessionLocal()
     try:
-        discussion = get_owned_discussion(db, discussion_id)
+        discussion = get_accessible_discussion(db, discussion_id)
         if not discussion:
             return jsonify({"error": "Discussion not found"}), 404
         discussion.is_hidden = True
@@ -370,7 +408,7 @@ def select_discussion_group(discussion_id: int):
 
     db = SessionLocal()
     try:
-        discussion = get_owned_discussion(db, discussion_id)
+        discussion = get_accessible_discussion(db, discussion_id)
         if not discussion:
             return jsonify({"error": "Discussion not found"}), 404
 
@@ -415,7 +453,7 @@ def set_discussion_group_selected_ideas(discussion_id: int):
 
     db = SessionLocal()
     try:
-        discussion = get_owned_discussion(db, discussion_id)
+        discussion = get_accessible_discussion(db, discussion_id)
         if not discussion:
             return jsonify({"error": "Discussion not found"}), 404
 
@@ -583,7 +621,7 @@ def update_idea(idea_id: int):
         idea = db.query(Idea).filter_by(id=idea_id).first()
         if not idea:
             return jsonify({"error": "Idea not found"}), 404
-        discussion = get_owned_discussion(db, idea.discussion_id)
+        discussion = get_accessible_discussion(db, idea.discussion_id)
         if not discussion:
             return jsonify({"error": "Discussion not found"}), 404
         if "is_selected" in payload:
